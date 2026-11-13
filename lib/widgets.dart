@@ -94,6 +94,14 @@ class QuoteText extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final size = fontSize * textScale();
+    // «Прп. Паисий Святогорец. Слова. Том I» под автором «Прп. Паисий
+    // Святогорец» — показываем только «Слова. Том I».
+    var source = quote.sourceName;
+    if (quote.author.isNotEmpty && source.startsWith(quote.author)) {
+      source = source
+          .substring(quote.author.length)
+          .replaceFirst(RegExp(r'^[\s.,:—–-]+'), '');
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -119,10 +127,10 @@ class QuoteText extends StatelessWidget {
               color: scheme.primary,
             ),
           ),
-        if (showSource && quote.sourceName.isNotEmpty) ...[
+        if (showSource && source.isNotEmpty) ...[
           const SizedBox(height: 6),
           Text(
-            quote.sourceName,
+            source,
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
           ),
