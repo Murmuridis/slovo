@@ -199,15 +199,16 @@ String radioUrl() {
   return u.isEmpty ? defaultRadioUrl : u;
 }
 
-/// Полоска радио над нижним меню: включить / выключить «Радио ВЕРА».
-class RadioBar extends StatefulWidget {
-  const RadioBar({super.key});
+/// Кнопка «Радио ВЕРА» в верхней панели, рядом с настройками.
+/// Нажатие — включить/выключить, долгое нажатие — открыть radiovera.ru.
+class RadioVeraButton extends StatefulWidget {
+  const RadioVeraButton({super.key});
 
   @override
-  State<RadioBar> createState() => _RadioBarState();
+  State<RadioVeraButton> createState() => _RadioVeraButtonState();
 }
 
-class _RadioBarState extends State<RadioBar> {
+class _RadioVeraButtonState extends State<RadioVeraButton> {
   String _state = 'stopped';
   Timer? _timer;
 
@@ -226,16 +227,30 @@ class _RadioBarState extends State<RadioBar> {
 
   Future<void> _poll() async {
     final s = await Native.radioState();
-    if (mounted && s != _state) setState(() => _state = s);
+    if (!mounted || s == _state) return;
+    final wasTrying = _state == 'buffering' || _state == 'playing';
+    setState(() => _state = s);
+    if (s == 'error' && wasTrying) {
+      _toast('Радио ВЕРА: нет связи. Попробуйте ещё раз.');
+    }
+  }
+
+  void _toast(String t) {
+    final m = ScaffoldMessenger.maybeOf(context);
+    m?.hideCurrentSnackBar();
+    m?.showSnackBar(
+        SnackBar(content: Text(t), duration: const Duration(seconds: 2)));
   }
 
   Future<void> _toggle() async {
     if (_state == 'playing' || _state == 'buffering') {
       await Native.radioStop();
       setState(() => _state = 'stopped');
+      _toast('Радио ВЕРА выключено');
     } else {
       setState(() => _state = 'buffering');
       await Native.radioPlay(radioUrl(), 'Радио ВЕРА');
+      _toast('Радио ВЕРА включается…');
     }
   }
 
@@ -244,54 +259,25 @@ class _RadioBarState extends State<RadioBar> {
     final scheme = Theme.of(context).colorScheme;
     final playing = _state == 'playing';
     final buffering = _state == 'buffering';
-    final status = switch (_state) {
-      'playing' => 'В эфире',
-      'buffering' => 'Подключаюсь…',
-      'error' => 'Нет связи — нажмите ещё раз',
-      _ => 'Светлое радио',
-    };
-    return Material(
-      color: scheme.surfaceContainerHighest,
-      child: InkWell(
-        onTap: _toggle,
-        onLongPress: () => Native.openUrl(radioSite),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-          child: Row(children: [
-            Icon(Icons.radio, color: scheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('Радио ВЕРА',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: scheme.onSurface,
-                          fontSize: 15)),
-                  Text(status,
-                      style: TextStyle(
-                          fontSize: 12.5, color: scheme.onSurfaceVariant)),
-                ],
-              ),
-            ),
-            if (buffering)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2.4)),
-              ),
-            IconButton.filled(
-              tooltip: playing || buffering ? 'Выключить радио' : 'Включить радио',
+    final Widget icon = buffering
+        ? SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+                strokeWidth: 2.2, color: scheme.onPrimary))
+        : Icon(playing ? Icons.radio : Icons.radio_outlined);
+    final tooltip = playing || buffering
+        ? 'Радио ВЕРА: выключить'
+        : 'Радио ВЕРА: включить';
+    return GestureDetector(
+      onLongPress: () => Native.openUrl(radioSite),
+      child: playing || buffering
+          ? IconButton.filled(
+              tooltip: tooltip, onPressed: _toggle, icon: icon)
+          : IconButton(
+              tooltip: tooltip,
               onPressed: _toggle,
-              icon: Icon(playing || buffering ? Icons.stop : Icons.play_arrow),
-            ),
-          ]),
-        ),
-      ),
+              icon: Icon(Icons.radio_outlined, color: scheme.primary)),
     );
   }
 }

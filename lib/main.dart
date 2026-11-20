@@ -105,8 +105,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_tab]),
+        leadingWidth: 48,
         leading: const Center(child: CrossMark(size: 24)),
         actions: [
+          const RadioVeraButton(),
           IconButton(
             tooltip: 'Настройки',
             icon: const Icon(Icons.settings_outlined),
@@ -146,7 +148,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const RadioBar(),
           // Подписи меню не увеличиваем вместе с системным шрифтом,
           // иначе «Избранное» и «Источники» переносятся по буквам.
           MediaQuery(

@@ -64,13 +64,15 @@ ThemeData buildTheme(Brightness b) {
       centerTitle: true,
       titleTextStyle: TextStyle(
         fontFamily: quoteFont,
-        fontSize: 22,
+        fontSize: 21,
         fontWeight: FontWeight.w700,
         color: scheme.onSurface,
-        letterSpacing: 0.5,
+        letterSpacing: 0.3,
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
+      // Компактное меню: 60 вместо стандартных 80.
+      height: 60,
       backgroundColor: dark ? const Color(0xFF1E1914) : Palette.parchmentDeep,
       indicatorColor: scheme.primary.withValues(alpha: 0.16),
       labelTextStyle: WidgetStatePropertyAll(
