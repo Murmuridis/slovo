@@ -74,7 +74,7 @@ ThemeData buildTheme(Brightness b) {
       backgroundColor: dark ? const Color(0xFF1E1914) : Palette.parchmentDeep,
       indicatorColor: scheme.primary.withValues(alpha: 0.16),
       labelTextStyle: WidgetStatePropertyAll(
-        TextStyle(fontFamily: uiFont, fontSize: 11.5, color: scheme.onSurface),
+        TextStyle(fontFamily: uiFont, fontSize: 11, color: scheme.onSurface),
       ),
     ),
     cardTheme: CardThemeData(

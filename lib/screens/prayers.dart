@@ -85,8 +85,9 @@ class _PrayersScreenState extends State<PrayersScreen> {
       ),
       if (!_loading && !searching && _items.length > 1)
         Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: Text('Чтобы изменить порядок, удерживайте молитву и перетащите',
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 6),
+          child: Text('Порядок: удерживайте молитву и перетащите',
+              textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
         ),
       Expanded(
@@ -124,7 +125,17 @@ class _PrayerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final x = prayer;
-    final firstLine = x.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    var firstLine = x.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // «Отче наш» → «…Иже еси на небесех», а не повтор названия.
+    final t = x.title.trim();
+    if (t.isNotEmpty &&
+        firstLine.toLowerCase().startsWith(t.toLowerCase()) &&
+        firstLine.length > t.length + 3) {
+      firstLine = firstLine
+          .substring(t.length)
+          .replaceFirst(RegExp(r'^[\s,.;:!—–-]+'), '');
+      if (firstLine.isNotEmpty) firstLine = '…$firstLine';
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Card(

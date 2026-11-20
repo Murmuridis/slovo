@@ -147,7 +147,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         mainAxisSize: MainAxisSize.min,
         children: [
           const RadioBar(),
-          NavigationBar(
+          // Подписи меню не увеличиваем вместе с системным шрифтом,
+          // иначе «Избранное» и «Источники» переносятся по буквам.
+          MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: MediaQuery.textScalerOf(context)
+                  .clamp(maxScaleFactor: 1.0),
+            ),
+            child: NavigationBar(
             selectedIndex: _tab,
             onDestinationSelected: (i) => setState(() => _tab = i),
             destinations: const [
@@ -172,6 +179,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   selectedIcon: Icon(Icons.library_books),
                   label: 'Источники'),
             ],
+          ),
           ),
         ],
       ),
