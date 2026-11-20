@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -18,6 +19,34 @@ import io.flutter.plugin.common.MethodChannel
  */
 class MainActivity : FlutterActivity() {
     private var pendingPermission: MethodChannel.Result? = null
+
+    /** Ожидание ответа от системного окна выбора/сохранения файла. */
+    private var pendingActivity: MethodChannel.Result? = null
+    private var pendingKind = ""
+
+    private fun startForResult(intent: Intent, code: Int, kind: String, result: MethodChannel.Result) {
+        pendingActivity?.success(null)
+        pendingActivity = result
+        pendingKind = kind
+        try {
+            startActivityForResult(intent, code)
+        } catch (_: Exception) {
+            pendingActivity = null
+            result.success(null)
+        }
+    }
+
+    /** Тяжёлую работу с файлами — не в главном потоке. */
+    private fun background(result: MethodChannel.Result, work: () -> Any?) {
+        Thread {
+            val r = try {
+                work()
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread { result.success(r) }
+        }.start()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -79,7 +108,95 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    "mediaDir" -> result.success(MediaFiles.dir(this).absolutePath)
+
+                    "pickFiles" -> {
+                        val kind = call.arguments as? String ?: "image"
+                        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                            if (kind == "audio") {
+                                type = "*/*"
+                                putExtra(
+                                    Intent.EXTRA_MIME_TYPES,
+                                    arrayOf("audio/*", "application/ogg")
+                                )
+                            } else {
+                                type = "image/*"
+                            }
+                        }
+                        startForResult(i, REQ_PICK, kind, result)
+                    }
+
+                    "createDocument" -> {
+                        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = call.argument<String>("mime") ?: "application/zip"
+                            putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "backup.zip")
+                        }
+                        startForResult(i, REQ_DOC, "", result)
+                    }
+
+                    "openDocument" -> {
+                        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                        }
+                        startForResult(i, REQ_DOC, "", result)
+                    }
+
+                    "writeBackup" -> {
+                        val uri = call.argument<String>("uri") ?: ""
+                        val db = call.argument<String>("db") ?: ""
+                        background(result) { Backup.write(this, uri, db) ?: "" }
+                    }
+
+                    "checkBackup" -> {
+                        val uri = call.arguments as? String ?: ""
+                        background(result) { Backup.check(this, uri) }
+                    }
+
+                    "restoreBackup" -> {
+                        val uri = call.argument<String>("uri") ?: ""
+                        val db = call.argument<String>("db") ?: ""
+                        PrayerAudio.stop()
+                        background(result) { Backup.restore(this, uri, db) ?: "" }
+                    }
+
+                    "audioPlay" -> {
+                        RadioService.stop(this)
+                        PrayerAudio.play(call.arguments as? String ?: "")
+                        result.success(null)
+                    }
+
+                    "audioPause" -> {
+                        PrayerAudio.pause()
+                        result.success(null)
+                    }
+
+                    "audioSeek" -> {
+                        PrayerAudio.seek(call.arguments as? Int ?: 0)
+                        result.success(null)
+                    }
+
+                    "audioStop" -> {
+                        PrayerAudio.stop()
+                        result.success(null)
+                    }
+
+                    "audioState" -> result.success(PrayerAudio.info())
+
+                    "keepScreenOn" -> {
+                        if (call.arguments == true) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                        result.success(null)
+                    }
+
                     "radioPlay" -> {
+                        PrayerAudio.stop()
                         val url = call.argument<String>("url") ?: ""
                         val title = call.argument<String>("title") ?: "Радио ВЕРА"
                         RadioService.play(this, url, title)
@@ -96,6 +213,30 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PICK && requestCode != REQ_DOC) return
+        val result = pendingActivity ?: return
+        pendingActivity = null
+        if (resultCode != android.app.Activity.RESULT_OK || data == null) {
+            result.success(null)
+            return
+        }
+        if (requestCode == REQ_DOC) {
+            result.success(data.data?.toString())
+            return
+        }
+        val uris = mutableListOf<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            for (k in 0 until clip.itemCount) clip.getItemAt(k).uri?.let { uris.add(it) }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+        val kind = pendingKind
+        background(result) { uris.mapNotNull { MediaFiles.import(this, it, kind) } }
     }
 
     override fun onRequestPermissionsResult(
@@ -115,5 +256,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val PERMISSION = "android.permission.POST_NOTIFICATIONS"
         private const val REQUEST_CODE = 4711
+        private const val REQ_PICK = 4801
+        private const val REQ_DOC = 4802
     }
 }

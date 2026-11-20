@@ -17,14 +17,119 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final store = Store.instance;
   late final _radio = TextEditingController(text: store.setting('radio_url'));
   int _count = 0;
+  int _prayers = 0;
 
   @override
   void initState() {
     super.initState();
     store.addListener(_rebuild);
-    store.quoteCount().then((c) {
-      if (mounted) setState(() => _count = c);
+    _counts();
+  }
+
+  Future<void> _counts() async {
+    try {
+      final c = await store.quoteCount();
+      final pr = await store.prayerCount();
+      if (mounted) {
+        setState(() {
+          _count = c;
+          _prayers = pr;
+        });
+      }
+    } catch (_) {}
+  }
+
+  void _toast(String t) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
+  }
+
+  /// Затемнить экран на время долгой операции.
+  Future<T> _withProgress<T>(String text, Future<T> Function() work) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 20),
+            Expanded(child: Text(text)),
+          ]),
+        ),
+      ),
+    );
+    try {
+      return await work();
+    } finally {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+  }
+
+  Future<void> _backup() async {
+    final d = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final name = 'slovo-backup-${d.year}-${two(d.month)}-${two(d.day)}.zip';
+    final uri = await Native.createDocument(name, 'application/zip');
+    if (uri == null || !mounted) return;
+    final err = await _withProgress('Сохраняю копию…', () async {
+      await Native.audioStop();
+      await store.close();
+      try {
+        return await Native.writeBackup(uri, store.dbPath);
+      } finally {
+        await store.open();
+      }
     });
+    _toast(err ?? 'Резервная копия сохранена: $name');
+  }
+
+  Future<void> _restore() async {
+    final uri = await Native.openDocument();
+    if (uri == null || !mounted) return;
+    final info = await Native.checkBackup(uri);
+    if (!mounted) return;
+    if (info['ok'] != true) {
+      _toast('${info['error'] ?? 'Это не резервная копия'}');
+      return;
+    }
+    final created = info['created'] as int? ?? 0;
+    final when = created > 0
+        ? ' от ${formatDate(DateTime.fromMillisecondsSinceEpoch(created))}'
+        : '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text('Восстановить копию$when?'),
+        content: Text(
+            'Все текущие цитаты, избранное, источники, молитвы и настройки '
+            'будут заменены данными из копии. Файлов картинок и аудио в копии: '
+            '${info['media'] ?? 0}.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Отмена')),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Восстановить')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final err = await _withProgress('Восстанавливаю…', () async {
+      await Native.audioStop();
+      await store.close();
+      try {
+        return await Native.restoreBackup(uri, store.dbPath);
+      } finally {
+        await store.open();
+      }
+    });
+    await Reminder.sync();
+    _radio.text = store.setting('radio_url');
+    _counts();
+    _toast(err ?? 'Данные восстановлены');
   }
 
   @override
@@ -155,12 +260,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           subtitle: const Text('radiovera.ru — программы и архив'),
           onTap: () => Native.openUrl(radioSite),
         ),
+        header('Резервная копия'),
+        ListTile(
+          leading: const Icon(Icons.save_alt),
+          title: const Text('Сохранить копию'),
+          subtitle: const Text('Цитаты, избранное, источники, молитвы с '
+              'картинками и аудио, настройки — в один файл .zip. Сохраните его '
+              'на Google Диск или в «Загрузки».'),
+          isThreeLine: true,
+          onTap: _backup,
+        ),
+        ListTile(
+          leading: const Icon(Icons.settings_backup_restore),
+          title: const Text('Восстановить из копии'),
+          subtitle: const Text('Например, на новом телефоне'),
+          onTap: _restore,
+        ),
         header('О приложении'),
         ListTile(
           leading: const CrossMark(size: 24),
           title: const Text('Слово старца'),
-          subtitle: Text('В базе ${pluralQuotes(_count)}. Источники и ссылки '
-              'на них — на вкладке «Источники».'),
+          subtitle: Text('В базе ${pluralQuotes(_count)}, молитв: $_prayers. '
+              'Источники и ссылки на них — на вкладке «Источники».'),
         ),
       ]),
     );

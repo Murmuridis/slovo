@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'native.dart';
 import 'screens/edit.dart';
+import 'screens/prayers.dart';
 import 'screens/quotes.dart';
 import 'screens/settings.dart';
 import 'screens/sources.dart';
@@ -62,7 +63,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _tab = 0;
 
-  static const _titles = ['Слово старца', 'Все цитаты', 'Избранное', 'Источники'];
+  static const _titles = [
+    'Слово старца',
+    'Все цитаты',
+    'Молитвы',
+    'Избранное',
+    'Источники',
+  ];
 
   @override
   void initState() {
@@ -91,7 +98,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final body = switch (_tab) {
       0 => const TodayScreen(),
       1 => const QuotesScreen(key: ValueKey('all')),
-      2 => const QuotesScreen(key: ValueKey('fav'), favoritesOnly: true),
+      2 => const PrayersScreen(),
+      3 => const QuotesScreen(key: ValueKey('fav'), favoritesOnly: true),
       _ => const SourcesScreen(),
     };
     return Scaffold(
@@ -114,7 +122,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onPressed: () => editQuote(context),
             child: const Icon(Icons.add),
           ),
-        3 => FloatingActionButton.extended(
+        2 => FloatingActionButton(
+            tooltip: 'Новая молитва',
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const PrayerEditScreen())),
+            child: const Icon(Icons.add),
+          ),
+        4 => FloatingActionButton.extended(
             onPressed: () async {
               final id = await editSource(context);
               if (id != null && context.mounted) {
@@ -145,6 +159,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   icon: Icon(Icons.menu_book_outlined),
                   selectedIcon: Icon(Icons.menu_book),
                   label: 'Цитаты'),
+              NavigationDestination(
+                  icon: Icon(Icons.auto_stories_outlined),
+                  selectedIcon: Icon(Icons.auto_stories),
+                  label: 'Молитвы'),
               NavigationDestination(
                   icon: Icon(Icons.favorite_border),
                   selectedIcon: Icon(Icons.favorite),

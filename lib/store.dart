@@ -1,9 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+
+import 'native.dart';
+import 'prayers_seed.dart';
 
 /// Источник высказываний: книга, сайт или своя подборка.
 class Source {
@@ -77,6 +81,41 @@ class Quote {
   }
 }
 
+/// Картинка или аудио, прикреплённые к молитве.
+class Attachment {
+  final int id;
+  final String kind; // image | audio
+  final String file; // имя файла в папке media
+  final String name; // как показывать
+  const Attachment(
+      {this.id = 0, required this.kind, required this.file, required this.name});
+
+  String get path => p.join(Store.instance.mediaDir, file);
+
+  Attachment rename(String n) =>
+      Attachment(id: id, kind: kind, file: file, name: n);
+}
+
+class Prayer {
+  final int id;
+  final String title;
+  final String text;
+  final bool favorite;
+  final List<Attachment> images;
+  final List<Attachment> audios;
+
+  const Prayer({
+    required this.id,
+    required this.title,
+    required this.text,
+    required this.favorite,
+    this.images = const [],
+    this.audios = const [],
+  });
+
+  String get shareText => '$title\n\n$text';
+}
+
 /// Всё хранение приложения: SQLite-база с источниками, цитатами и настройками.
 /// Любое изменение оповещает слушателей, чтобы экраны перерисовались.
 class Store extends ChangeNotifier {
@@ -86,16 +125,27 @@ class Store extends ChangeNotifier {
   late Database _db;
   final Map<String, String> _settings = {};
 
+  /// Полный путь к файлу базы (для резервной копии).
+  String dbPath = '';
+
+  /// Папка с картинками и аудио молитв.
+  String mediaDir = '';
+
   /// Версия встроенной подборки. Если в новой версии приложения в
   /// assets/data/quotes.json добавятся цитаты — увеличить здесь и там.
   static const _seedVersion = 1;
 
   Future<void> open() async {
-    final dir = await getDatabasesPath();
+    _settings.clear();
+    dbPath = p.join(await getDatabasesPath(), 'slovo.db');
     _db = await openDatabase(
-      p.join(dir, 'slovo.db'),
-      version: 1,
+      dbPath,
+      version: 2,
+      onUpgrade: (db, from, to) async {
+        if (from < 2) await _createPrayerTables(db);
+      },
       onCreate: (db, v) async {
+        await _createPrayerTables(db);
         await db.execute('''
           CREATE TABLE sources(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +176,217 @@ class Store extends ChangeNotifier {
       _settings[r['key'] as String] = r['value'] as String;
     }
     await _seedIfNeeded();
+    await _seedPrayers();
+    mediaDir = await Native.mediaDir();
+    await _cleanMedia();
+    notifyListeners();
+  }
+
+  /// Закрыть базу (перед сохранением или восстановлением копии).
+  Future<void> close() => _db.close();
+
+  static Future<void> _createPrayerTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS prayers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        favorite INTEGER NOT NULL DEFAULT 0,
+        builtin INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created INTEGER NOT NULL DEFAULT 0
+      )''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS attachments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        prayer_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        file TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        sort INTEGER NOT NULL DEFAULT 0
+      )''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS a_prayer ON attachments(prayer_id)');
+  }
+
+  Future<void> _seedPrayers() async {
+    if (setting('prayers_seed') == '1') return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final batch = _db.batch();
+    var i = 0;
+    for (final (title, text) in prayerSeed) {
+      batch.insert('prayers', {
+        'title': title,
+        'text': text,
+        'builtin': 1,
+        'sort': i++,
+        'created': now,
+      });
+    }
+    await batch.commit(noResult: true);
+    await setSetting('prayers_seed', '1');
+  }
+
+  /// Удалить из папки media файлы, которые ни к чему не прикреплены
+  /// (например, выбранные, но не сохранённые).
+  Future<void> _cleanMedia() async {
+    if (mediaDir.isEmpty) return;
+    try {
+      final used = {
+        for (final r in await _db.query('attachments', columns: ['file']))
+          r['file'] as String,
+      };
+      for (final f in Directory(mediaDir).listSync().whereType<File>()) {
+        if (!used.contains(p.basename(f.path))) f.deleteSync();
+      }
+    } catch (_) {}
+  }
+
+  // ---------- Молитвы ----------
+
+  Future<List<Prayer>> prayers({String search = ''}) async {
+    final rows = await _db.query('prayers', orderBy: 'sort, id');
+    final att = await _db.query('attachments', orderBy: 'sort, id');
+    final byPrayer = <int, List<Attachment>>{};
+    for (final a in att) {
+      byPrayer.putIfAbsent(a['prayer_id'] as int, () => []).add(Attachment(
+            id: a['id'] as int,
+            kind: a['kind'] as String,
+            file: a['file'] as String,
+            name: (a['name'] as String?) ?? '',
+          ));
+    }
+    var list = [
+      for (final r in rows)
+        _prayerFrom(r, byPrayer[r['id'] as int] ?? const []),
+    ];
+    final needle = search.trim().toLowerCase();
+    if (needle.isNotEmpty) {
+      list = list
+          .where((x) =>
+              x.title.toLowerCase().contains(needle) ||
+              x.text.toLowerCase().contains(needle))
+          .toList();
+    }
+    return list;
+  }
+
+  Prayer _prayerFrom(Map<String, Object?> r, List<Attachment> att) => Prayer(
+        id: r['id'] as int,
+        title: (r['title'] as String?) ?? '',
+        text: (r['text'] as String?) ?? '',
+        favorite: (r['favorite'] as int? ?? 0) == 1,
+        images: att.where((a) => a.kind == 'image').toList(),
+        audios: att.where((a) => a.kind == 'audio').toList(),
+      );
+
+  Future<Prayer?> prayer(int id) async {
+    final rows =
+        await _db.query('prayers', where: 'id = ?', whereArgs: [id], limit: 1);
+    if (rows.isEmpty) return null;
+    final att = await _db.query('attachments',
+        where: 'prayer_id = ?', whereArgs: [id], orderBy: 'sort, id');
+    return _prayerFrom(rows.first, [
+      for (final a in att)
+        Attachment(
+          id: a['id'] as int,
+          kind: a['kind'] as String,
+          file: a['file'] as String,
+          name: (a['name'] as String?) ?? '',
+        ),
+    ]);
+  }
+
+  /// Сохранить молитву со всеми вложениями. Файлы, которые были
+  /// прикреплены раньше, а теперь убраны, удаляются с телефона.
+  Future<int> savePrayer({
+    int? id,
+    required String title,
+    required String text,
+    required List<Attachment> attachments,
+  }) async {
+    final oldFiles = <String>{};
+    late int pid;
+    await _db.transaction((txn) async {
+      if (id == null) {
+        final mx = await txn.rawQuery('SELECT MAX(sort) AS m FROM prayers');
+        final sort = ((mx.first['m'] as int?) ?? -1) + 1;
+        pid = await txn.insert('prayers', {
+          'title': title.trim(),
+          'text': text.trim(),
+          'sort': sort,
+          'created': DateTime.now().millisecondsSinceEpoch,
+        });
+      } else {
+        pid = id;
+        await txn.update(
+            'prayers', {'title': title.trim(), 'text': text.trim()},
+            where: 'id = ?', whereArgs: [id]);
+        for (final r in await txn.query('attachments',
+            columns: ['file'], where: 'prayer_id = ?', whereArgs: [id])) {
+          oldFiles.add(r['file'] as String);
+        }
+        await txn.delete('attachments', where: 'prayer_id = ?', whereArgs: [id]);
+      }
+      var i = 0;
+      for (final a in attachments) {
+        await txn.insert('attachments', {
+          'prayer_id': pid,
+          'kind': a.kind,
+          'file': a.file,
+          'name': a.name,
+          'sort': i++,
+        });
+      }
+    });
+    oldFiles.removeAll(attachments.map((a) => a.file));
+    deleteMediaFiles(oldFiles);
+    notifyListeners();
+    return pid;
+  }
+
+  Future<void> deletePrayer(int id) async {
+    final files = [
+      for (final r in await _db.query('attachments',
+          columns: ['file'], where: 'prayer_id = ?', whereArgs: [id]))
+        r['file'] as String,
+    ];
+    await _db.transaction((txn) async {
+      await txn.delete('attachments', where: 'prayer_id = ?', whereArgs: [id]);
+      await txn.delete('prayers', where: 'id = ?', whereArgs: [id]);
+    });
+    deleteMediaFiles(files);
+    notifyListeners();
+  }
+
+  Future<void> setPrayerFavorite(int id, bool fav) async {
+    await _db.update('prayers', {'favorite': fav ? 1 : 0},
+        where: 'id = ?', whereArgs: [id]);
+    notifyListeners();
+  }
+
+  /// Новый порядок молитв (id сверху вниз).
+  Future<void> reorderPrayers(List<int> ids) async {
+    final batch = _db.batch();
+    for (var i = 0; i < ids.length; i++) {
+      batch.update('prayers', {'sort': i}, where: 'id = ?', whereArgs: [ids[i]]);
+    }
+    await batch.commit(noResult: true);
+    notifyListeners();
+  }
+
+  Future<int> prayerCount() async {
+    final r = await _db.rawQuery('SELECT COUNT(*) AS c FROM prayers');
+    return (r.first['c'] as int?) ?? 0;
+  }
+
+  void deleteMediaFiles(Iterable<String> files) {
+    for (final f in files) {
+      try {
+        final file = File(p.join(mediaDir, f));
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+    }
   }
 
   Future<void> _seedIfNeeded() async {

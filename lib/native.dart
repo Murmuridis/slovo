@@ -35,6 +35,65 @@ class Native {
   static Future<bool> notificationsEnabled() async =>
       (await _call<bool>('notificationsEnabled')) ?? false;
 
+  // ---------- Файлы ----------
+
+  /// Папка с картинками и аудио молитв.
+  static Future<String> mediaDir() async =>
+      (await _call<String>('mediaDir')) ?? '';
+
+  /// Выбрать картинки (kind = 'image') или аудио ('audio').
+  /// Файлы сразу копируются в папку приложения.
+  static Future<List<({String file, String name})>> pickFiles(
+      String kind) async {
+    final r = await _call<List<Object?>>('pickFiles', kind);
+    if (r == null) return [];
+    return [
+      for (final m in r.whereType<Map>())
+        (file: '${m['file'] ?? ''}', name: '${m['name'] ?? ''}'),
+    ].where((x) => x.file.isNotEmpty).toList();
+  }
+
+  /// Спросить, куда сохранить файл. Возвращает адрес (content://…) или null.
+  static Future<String?> createDocument(String name, String mime) =>
+      _call<String>('createDocument', {'name': name, 'mime': mime});
+
+  /// Выбрать файл. Возвращает адрес (content://…) или null.
+  static Future<String?> openDocument() => _call<String>('openDocument');
+
+  /// Записать резервную копию. Возвращает текст ошибки или null.
+  static Future<String?> writeBackup(String uri, String dbPath) async {
+    final r = await _call<String>('writeBackup', {'uri': uri, 'db': dbPath});
+    if (r == null) return 'Не удалось сохранить копию';
+    return r.isEmpty ? null : r;
+  }
+
+  /// Проверить файл копии: {ok, error, media, created}.
+  static Future<Map<Object?, Object?>> checkBackup(String uri) async =>
+      (await _call<Map<Object?, Object?>>('checkBackup', uri)) ??
+      {'ok': false, 'error': 'Не удалось прочитать файл'};
+
+  /// Восстановить копию (база должна быть закрыта). Текст ошибки или null.
+  static Future<String?> restoreBackup(String uri, String dbPath) async {
+    final r =
+        await _call<String>('restoreBackup', {'uri': uri, 'db': dbPath});
+    if (r == null) return 'Не удалось восстановить копию';
+    return r.isEmpty ? null : r;
+  }
+
+  static Future<void> keepScreenOn(bool on) => _call<void>('keepScreenOn', on);
+
+  // ---------- Аудио молитв ----------
+
+  static Future<void> audioPlay(String path) => _call<void>('audioPlay', path);
+  static Future<void> audioPause() => _call<void>('audioPause');
+  static Future<void> audioSeek(int ms) => _call<void>('audioSeek', ms);
+  static Future<void> audioStop() => _call<void>('audioStop');
+
+  /// {path, state, pos, dur}; state: stopped|preparing|playing|paused|completed|error
+  static Future<Map<Object?, Object?>> audioState() async =>
+      (await _call<Map<Object?, Object?>>('audioState')) ??
+      {'path': '', 'state': 'stopped', 'pos': 0, 'dur': 0};
+
   // ---------- Радио ----------
 
   static Future<void> radioPlay(String url, String title) =>
@@ -70,6 +129,14 @@ class Reminder {
   }
 
   static Future<void> sync() async {
+    try {
+      await _sync();
+    } catch (_) {
+      // База может быть временно закрыта (резервная копия) — пересчитаем позже.
+    }
+  }
+
+  static Future<void> _sync() async {
     if (!enabled) {
       await Native._call<void>('cancelReminder');
       return;
